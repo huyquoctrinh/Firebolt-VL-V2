@@ -1,0 +1,89 @@
+# FireboltVL: Joint Vision-Language Model (V-JEPA + Expert Connector + SSM + LLM loss)
+
+# --- Model ---
+model:
+  # Vision encoder (V-JEPA style; SigLIP as default placeholder)
+  vision_encoder_type: "siglip"  # "siglip" | "siglip_grid" (V-JEPA when available)
+  vision_ckpt_path: "/home/mamba/ML_project/Testing/Huy/joint_vlm/viper-vlm/pretrained/siglip2_base_16_256"
+  vision_hidden_size: 768
+  vision_freeze: False
+
+  # Routing: top-k vision tokens
+  routing_top_k: 5
+
+  # Expert Connector
+  num_experts: 4
+  expert_top_k: 2
+  expert_hidden_dim: 512
+  expert_dropout: 0.1
+
+  # State-Space Model on visual stream
+  ssm_type: "s4"  # "s4" | "s4d" | "self_attn"
+  ssm_d_state: 128
+  ssm_dropout: 0.1
+
+  # Project visual tokens to LLM dim before concat
+  llm_hidden_size: 1024  # set from base_lm at runtime
+  visual_proj_dim: 1024
+  visual_proj_layers: 1
+  visual_proj_dropout: 0.1
+
+  # LLM backbone
+  lm_name_or_path: "LiquidAI/LFM2-350M"
+  freeze_llm: True
+
+  # Special tokens
+  image_token_id: 64400
+
+# --- Data ---
+data:
+  image_path: "/home/mamba/ML_project/Testing/Huy/joint_vlm/dataset/cc_3m/images"
+  json_path: "/home/mamba/ML_project/Testing/Huy/joint_vlm/dataset/cc_3m/chat.json"
+  train_val_split: [0.99, 0.01]
+
+# --- Training ---
+# Stage 1: freeze LLM + vision encoder, train connector only (router, expert_connector, ssm, visual_proj).
+# Stage 2: train all (unfreeze LLM and optionally vision).
+training:
+  stage: 1 # 1 = connector only; 2 = full fine-tune
+  num_epochs: 3
+  # Stage-specific overrides (optional). If set, override num_epochs/lr per stage.
+  stage1:
+    num_epochs: 3
+    lr: 1e-4
+  stage2:
+    num_epochs: 2
+    lr: 5e-5
+  batch_size: 4
+  num_workers: 32
+  device: "cuda"
+  results_dir: "fireboltvl_results"
+  resume_from_checkpoint: null  # Set this only when doing stage 2 resume.
+  optimizer:
+    lr: 1e-4
+  scheduler:
+    T_max: 10
+    eta_min: 1e-6
+  ddp:
+    enabled: False
+    rank: 0
+    world_size: 1
+  amp_dtype: "bf16"
+
+# --- Evaluation / Inference ---
+evaluation:
+  model_dir: "/home/mamba/ML_project/Testing/Huy/joint_vlm/FireboltVL/outputs/2026-02-06/11-13-38/fireboltvl_results/stage1/epoch_3/"
+  tokenizer_dir: "/home/mamba/ML_project/Testing/Huy/joint_vlm/liquid_tokenizer_cot_fixed"
+  prompt: "What is the original flight in the image?"
+  image_path: "/home/mamba/ML_project/Testing/Huy/joint_vlm/viper-vlm/image2.jpg"
+  do_sample: True
+  top_p: 0.95
+  temperature: 0.1
+  max_new_tokens: 256
+
+# --- Tokenizer & Processor ---
+tokenizer_path: "/home/mamba/ML_project/Testing/Huy/joint_vlm/liquid_tokenizer_cot_fixed"
+processor_path: "/home/mamba/ML_project/Testing/Huy/joint_vlm/viper-vlm/pretrained/siglip2_base_16_256"
+
+logging:
+  filename: "logs/fireboltvl.log"
