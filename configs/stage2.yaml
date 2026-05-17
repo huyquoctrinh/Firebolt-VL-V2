@@ -59,7 +59,13 @@ model:
 # --- Data ---
 data:
   image_path: "/home/mamba/ML_project/Testing/Huy/joint_vlm/dataset"
-  json_path: "/home/mamba/ML_project/Testing/Huy/joint_vlm/dataset/llava_cot_mmpr_sharegpt_merged_clean.jsonl"
+  json_path:
+    - "llava_cot"
+    - "llava_inst"
+    - "llava_mix_vsft"
+    - "llava_next"
+    - "llava_sharegpt"
+    - "MMPR-v1.2"
   train_val_split: [0.99, 0.01]
   max_length: 4096
 
@@ -76,7 +82,8 @@ training:
   stage2:
     num_epochs: 2
     lr: 1e-4
-  batch_size: 4
+  batch_size: 2
+  gradient_accumulation_steps: 1
   num_workers: 32
   device: "cuda"
   results_dir: "fireboltvl_results_muon_adamw_stage2"
