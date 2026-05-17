@@ -77,6 +77,7 @@ training:
     num_epochs: 2
     lr: 5e-5
   batch_size: 64
+  gradient_accumulation_steps: 1
   num_workers: 32
   device: "cuda"
   results_dir: "fireboltvl_results1"

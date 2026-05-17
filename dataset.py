@@ -1,5 +1,4 @@
 # Dataset cho FireboltVL: cùng format CCDataset (JSONL/JSON, conversations, image).
-import os
 import json
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -9,9 +8,21 @@ from PIL import Image
 from functools import partial
 import random
 import numpy as np
-from typing import Optional
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 IGNORE_INDEX = -100
+SOURCE_ALIASES = {
+    "llava_cot",
+    "llava_inst",
+    "llava_mix_vsft",
+    "llaval_mix_vsft",
+    "llava_next",
+    "llava_sharegpt",
+    "mmpr",
+    "mmpr-v1.2",
+    "MMPR-v1.2",
+}
 
 
 def load_jsonl(json_path):
@@ -22,6 +33,201 @@ def load_jsonl(json_path):
 def load_json(json_path):
     with open(json_path, "r") as f:
         return json.load(f)
+
+
+def iter_json_records(json_path: Path):
+    if json_path.suffix == ".jsonl":
+        with json_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    record = json.loads(line)
+                    if isinstance(record, dict):
+                        yield record
+        return
+
+    with json_path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    if isinstance(data, list):
+        for record in data:
+            if isinstance(record, dict):
+                yield record
+    elif isinstance(data, dict):
+        for key in ("data", "annotations", "items"):
+            values = data.get(key)
+            if isinstance(values, list):
+                for record in values:
+                    if isinstance(record, dict):
+                        yield record
+                return
+        yield data
+
+
+def as_path_list(value) -> List[Any]:
+    if isinstance(value, (str, Path)):
+        return [value]
+    try:
+        return list(value)
+    except TypeError:
+        pass
+    return [value]
+
+
+def clean_image_value(value: Any):
+    if isinstance(value, list):
+        values = []
+        for item in value:
+            cleaned = clean_image_value(item)
+            if cleaned:
+                values.append(cleaned)
+        return values
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    if value.startswith("./"):
+        value = value[2:]
+    return value.replace("\\", "/")
+
+
+def source_key(value: Any) -> str:
+    return str(value).strip().rstrip("/").split("/")[-1]
+
+
+def discover_json_specs(json_path, dataset_root: Path) -> List[Tuple[Path, List[str]]]:
+    specs: List[Tuple[Path, List[str]]] = []
+    for raw_entry in as_path_list(json_path):
+        entry = str(raw_entry)
+        key = source_key(entry)
+        if key in SOURCE_ALIASES:
+            specs.extend(discover_source_specs(key, dataset_root))
+            continue
+
+        path = Path(entry)
+        if not path.is_absolute():
+            path = dataset_root / path
+        if path.is_dir():
+            inferred = source_key(path)
+            if inferred in SOURCE_ALIASES:
+                specs.extend(discover_source_specs(inferred, dataset_root))
+            else:
+                specs.extend((p, infer_image_roots(p, dataset_root)) for p in sorted(path.rglob("*.json*")))
+        elif path.is_file():
+            specs.append((path, infer_image_roots(path, dataset_root)))
+        else:
+            raise FileNotFoundError(f"Annotation source not found: {entry}")
+    return specs
+
+
+def discover_source_specs(source: str, dataset_root: Path) -> List[Tuple[Path, List[str]]]:
+    normalized = source.lower()
+    specs: List[Tuple[Path, List[str]]] = []
+
+    if normalized == "llava_cot":
+        for name in ("train.jsonl", "train_llava.json"):
+            path = dataset_root / "llava_cot" / name
+            if path.is_file():
+                specs.append((path, ["llava_cot"]))
+        return specs
+
+    if normalized == "llava_inst":
+        root = dataset_root / "llava_inst"
+        image_roots = [
+            "llava_inst_image",
+            "llava_cot/coco/train2017",
+            "llava_next/llava_next_raw_format/coco/train2017",
+        ]
+        return [(path, image_roots) for path in sorted(root.glob("*.json"))]
+
+    if normalized in {"llava_mix_vsft", "llaval_mix_vsft"}:
+        root = dataset_root / "llaval_mix_vsft"
+        preferred = root / "llava_vfst_converted.json"
+        paths = [preferred] if preferred.is_file() else sorted(root.glob("*.json"))
+        return [(path, ["llaval_mix_vsft/images", "llaval_mix_vsft"]) for path in paths]
+
+    if normalized == "llava_next":
+        path = dataset_root / "llava_next/llava_next_raw_format/llava_next_raw_format_processed.json"
+        return [(path, ["llava_next/llava_next_raw_format"])] if path.is_file() else []
+
+    if normalized == "llava_sharegpt":
+        processed = dataset_root / "llava_sharegpt/llava_sharegpt_processed.jsonl"
+        if processed.is_file():
+            specs.append((processed, [""]))
+        sft_root = dataset_root / "llava_sharegpt/sft"
+        specs.extend((path, ["llava_sharegpt/image_data"]) for path in sorted(sft_root.rglob("*.jsonl")))
+        return specs
+
+    if normalized in {"mmpr", "mmpr-v1.2"}:
+        return discover_mmpr_specs(dataset_root)
+
+    return specs
+
+
+def discover_mmpr_specs(dataset_root: Path) -> List[Tuple[Path, List[str]]]:
+    meta_path = dataset_root / "MMPR-v1.2/meta.json"
+    if not meta_path.is_file():
+        annotations = dataset_root / "MMPR-v1.2/annotations"
+        return [(path, ["MMPR-v1.2/images"]) for path in sorted(annotations.glob("*.jsonl"))]
+
+    with meta_path.open("r", encoding="utf-8") as f:
+        meta = json.load(f)
+    specs = []
+    seen = set()
+    for item in meta.values():
+        annotation = item.get("annotation")
+        image_root = item.get("root", "MMPR-v1.2/images")
+        if not annotation:
+            continue
+        key = (annotation, image_root)
+        if key in seen:
+            continue
+        seen.add(key)
+        path = dataset_root / annotation
+        if path.is_file():
+            specs.append((path, [image_root]))
+    return specs
+
+
+def infer_image_roots(path: Path, dataset_root: Path) -> List[str]:
+    try:
+        rel = path.resolve().relative_to(dataset_root.resolve())
+    except ValueError:
+        return [""]
+    parts = rel.parts
+    if not parts:
+        return [""]
+    if parts[0] == "llava_cot":
+        return ["llava_cot"]
+    if parts[0] == "llava_inst":
+        return ["llava_inst_image", "llava_cot/coco/train2017", "llava_next/llava_next_raw_format/coco/train2017"]
+    if parts[0] == "llaval_mix_vsft":
+        return ["llaval_mix_vsft/images", "llaval_mix_vsft"]
+    if parts[0] == "llava_next":
+        return ["llava_next/llava_next_raw_format"]
+    if parts[0] == "llava_sharegpt":
+        if path.name == "llava_sharegpt_processed.jsonl":
+            return [""]
+        if len(parts) > 2 and parts[1] == "image_data":
+            parent = "/".join(parts[:-1])
+            return [f"{parent}/png", f"{parent}/documents", parent, "llava_sharegpt/image_data"]
+        return ["llava_sharegpt/image_data"]
+    if parts[0] == "MMPR-v1.2":
+        for spec_path, roots in discover_mmpr_specs(dataset_root):
+            if spec_path == path:
+                return roots
+        return ["MMPR-v1.2/images"]
+    return [""]
+
+
+def first_text(record: Dict[str, Any], keys: Iterable[str]) -> str:
+    for key in keys:
+        value = record.get(key)
+        if value is None:
+            continue
+        text = value if isinstance(value, str) else str(value)
+        text = text.strip()
+        if text:
+            return text
+    return ""
 
 
 def mask_image_patches(pixel_values, mask_ratio, patch_size=14):
@@ -53,6 +259,7 @@ class CCDataset(Dataset):
         dino_processor=None,
     ):
         self.image_path = image_path
+        self.dataset_root = Path(image_path)
         self.json_path = json_path
         self.tokenizer = tokenizer
         self.processor = processor
@@ -60,17 +267,67 @@ class CCDataset(Dataset):
         self.max_length = max_length
         self.vjepa_processor = vjepa_processor
         self.dino_processor = dino_processor
-        if json_path.endswith(".jsonl"):
-            self.data = load_jsonl(json_path)
-        elif json_path.endswith(".json"):
-            self.data = load_json(json_path)
-        else:
-            raise ValueError(f"Unsupported file extension: {json_path}")
+        self.data = self._load_mixed_records(json_path)
+        if not self.data:
+            raise ValueError(f"No usable training records found in {json_path}")
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token or "<|pad|>"
 
     def __len__(self):
         return len(self.data)
+
+    def _load_mixed_records(self, json_path) -> List[Dict[str, Any]]:
+        records: List[Dict[str, Any]] = []
+        specs = discover_json_specs(json_path, self.dataset_root)
+        for path, image_roots in specs:
+            for record in iter_json_records(path):
+                item = self._normalize_record(record, image_roots)
+                if item is not None:
+                    records.append(item)
+        return records
+
+    def _normalize_record(self, record: Dict[str, Any], image_roots: List[str]) -> Optional[Dict[str, Any]]:
+        conversations = record.get("conversations")
+        if not isinstance(conversations, list):
+            question = first_text(record, ["question", "prompt", "instruction", "query"])
+            answer = first_text(record, ["chosen", "response", "output", "answer", "answer_gt", "gt_answer", "label"])
+            if question and answer:
+                conversations = [
+                    {"from": "human", "value": question},
+                    {"from": "gpt", "value": answer},
+                ]
+            else:
+                return None
+
+        normalized_conversations = []
+        for turn in conversations:
+            if not isinstance(turn, dict):
+                continue
+            value = turn.get("value")
+            if value is None:
+                value = turn.get("content")
+            if value is None:
+                continue
+            normalized_conversations.append(
+                {
+                    "from": turn.get("from") or turn.get("role"),
+                    "value": value if isinstance(value, str) else str(value),
+                }
+            )
+
+        if not normalized_conversations:
+            return None
+
+        image = record.get("image")
+        if image is None:
+            image = first_text(record, ["imgname", "image_path", "filename", "file_name"])
+
+        return {
+            "id": record.get("id"),
+            "image": clean_image_value(image),
+            "conversations": normalized_conversations,
+            "_image_roots": image_roots,
+        }
 
     def _normalize_role(self, role):
         role = (role or "").lower()
@@ -136,18 +393,45 @@ class CCDataset(Dataset):
         attention_mask = torch.ones_like(input_ids, dtype=torch.long)
         return input_ids, attention_mask, labels
 
-    def _get_image_paths(self, image_value):
+    def _candidate_image_paths(self, image_value: str, image_roots: List[str]) -> List[Path]:
+        image_value = clean_image_value(image_value)
+        if not image_value:
+            return []
+        image_path = Path(image_value)
+        if image_path.is_absolute():
+            return [image_path]
+
+        candidates = [self.dataset_root / image_value]
+        for root in image_roots:
+            if not root:
+                continue
+            root = root.strip("/")
+            if image_value == root or image_value.startswith(root + "/"):
+                candidates.append(self.dataset_root / image_value)
+            else:
+                candidates.append(self.dataset_root / root / image_value)
+        return candidates
+
+    def _get_image_paths(self, item):
+        image_value = item.get("image")
+        image_roots = item.get("_image_roots", [""])
         if isinstance(image_value, str):
             image_values = [image_value]
         elif isinstance(image_value, list):
             image_values = [x for x in image_value if isinstance(x, str) and x]
         else:
             image_values = []
-        return [os.path.join(self.image_path, image_value) for image_value in image_values]
+        resolved = []
+        for value in image_values:
+            for candidate in self._candidate_image_paths(value, image_roots):
+                if candidate.is_file():
+                    resolved.append(str(candidate))
+                    break
+        return resolved
 
     def __getitem__(self, idx):
         item = self.data[idx]
-        image_paths = self._get_image_paths(item.get("image"))
+        image_paths = self._get_image_paths(item)
         has_image = len(image_paths) > 0
         pixel_values_vjepa = None
         pixel_values_dino = None

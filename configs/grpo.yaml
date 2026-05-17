@@ -1,0 +1,107 @@
+# FireboltVL GRPO Post-Training Config
+
+# --- Model ---
+model:
+  vision_encoder_type: "siglip"
+  vision_ckpt_path: "/home/mamba/ML_project/Testing/Huy/joint_vlm/viper-vlm/pretrained/siglip2_base_16_256"
+  vision_hidden_size: 768
+  vision_freeze: true
+
+  routing_top_k: 5
+  num_experts: 4
+  expert_top_k: 2
+  expert_hidden_dim: 512
+  expert_dropout: 0.1
+
+  ssm_type: "s4"
+  ssm_d_state: 64
+  ssm_dropout: 0.1
+
+  llm_hidden_size: 1024
+  visual_proj_dim: 1024
+  visual_proj_layers: 1
+  visual_proj_dropout: 0.1
+
+  lm_name_or_path: "LiquidAI/LFM2-350M"
+  freeze_llm: false
+
+  image_token_id: 64400
+
+  aux_balance_loss_enabled: false
+  aux_balance_loss_weight: 0.01
+  aux_recon_loss_enabled: false
+  aux_recon_loss_weight: 1.0
+  recon_mask_ratio: 0.0
+  recon_mask_prob: 0.0
+  recon_teacher_model: "facebook/vjepa2-vitg-fpc64-384"
+  recon_teacher_hidden_size: 1408
+  aux_contrastive_loss_enabled: false
+  aux_contrastive_loss_weight: 0.1
+  contrastive_embed_dim: 512
+  contrastive_temperature: 0.07
+  contrastive_learnable_temp: true
+  aux_dino_loss_enabled: false
+  aux_dino_loss_weight: 1.0
+  dino_teacher_model: "facebook/dinov2-base"
+  dino_teacher_hidden_size: 768
+  dino_student_temperature: 0.1
+  dino_teacher_temperature: 0.04
+
+# --- Data ---
+data:
+  dataset_name: "di-zhang-fdu/R1-Vision-Reasoning-Instructions"
+  image_base_path: "/home/mamba/ML_project/Testing/Huy/joint_vlm/dataset/llava_cot"
+  max_prompt_length: 256
+  max_response_length: 512
+  filter_correct_only: false
+  # Kept for compatibility with existing config structure
+  image_path: "/home/mamba/ML_project/Testing/Huy/joint_vlm/dataset"
+  json_path: ""
+  train_val_split: [0.99, 0.01]
+  max_length: 4096
+
+# --- GRPO ---
+grpo:
+  group_size: 4
+  clip_epsilon: 0.2
+  kl_coeff: 0.01
+  max_new_tokens: 512
+  temperature: 0.7
+  top_p: 0.95
+  reward_weights:
+    accuracy: 2.0
+    format: 1.0
+
+# --- Training ---
+training:
+  stage: 3
+  num_epochs: 1
+  stage3:
+    num_epochs: 1
+    lr: 5e-7
+    gradient_accumulation_steps: 4
+  batch_size: 1
+  gradient_accumulation_steps: 4
+  num_workers: 4
+  device: "cuda"
+  results_dir: "fireboltvl_results_grpo"
+  resume_from_checkpoint: "/home/mamba/ML_project/Testing/Huy/joint_vlm/FireboltVL/fireboltvl_results2/stage2/epoch_2"
+  optimizer:
+    name: "adamw"
+    lr: 5e-7
+    weight_decay: 0.01
+  scheduler:
+    T_max: 1
+    eta_min: 1e-8
+  ddp:
+    enabled: false
+    rank: 0
+    world_size: 1
+  amp_dtype: "bf16"
+
+# --- Tokenizer & Processor ---
+tokenizer_path: "/home/mamba/ML_project/Testing/Huy/joint_vlm/liquid_tokenizer_cot_fixed"
+processor_path: "/home/mamba/ML_project/Testing/Huy/joint_vlm/viper-vlm/pretrained/siglip2_base_16_256"
+
+logging:
+  filename: "logs/fireboltvl_grpo.log"
