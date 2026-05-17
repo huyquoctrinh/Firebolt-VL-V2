@@ -6,10 +6,10 @@
 
 # Multi-GPU with DDP using configs/stage1.yml
 # Then launch with torchrun:
-CUDA_VISIBLE_DEVICES=0,1 torchrun --nproc_per_node=2 train.py --config-name stage2 training.ddp.enabled=True
+# CUDA_VISIBLE_DEVICES=0,1 torchrun --nproc_per_node=2 train.py --config-name stage2 training.ddp.enabled=True
 
 # Example: 4 GPUs, stage 1
-# torchrun --nproc_per_node=4 train.py --config-name stage1 training.ddp.enabled=True training.stage=1
+# CUDA_VISIBLE_DEVICES=0,1 torchrun --nproc_per_node=2 train.py --config-name stage1 training.ddp.enabled=True training.stage=1
 
 # Example: 2 GPUs, stage 2, resume from stage1
-# torchrun --nproc_per_node=2 train.py --config-name stage1 training.ddp.enabled=True training.stage=2 training.resume_from_checkpoint=fireboltvl_results/stage1/epoch_3
+CUDA_VISIBLE_DEVICES=0,1 torchrun --nproc_per_node=2 train.py --config-name stage2 training.ddp.enabled=True training.stage=2 training.resume_from_checkpoint=/home/mamba/ML_project/Testing/Huy/joint_vlm/FireboltVL/fireboltvl_results1/stage1/epoch_10

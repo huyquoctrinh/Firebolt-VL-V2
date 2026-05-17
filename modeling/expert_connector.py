@@ -2,6 +2,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Tuple
 
 
 class Expert(nn.Module):
@@ -42,10 +43,10 @@ class ExpertConnector(nn.Module):
         ])
         self.router = nn.Linear(d_model, num_experts)
 
-    def forward(self, z: torch.Tensor) -> torch.Tensor:
+    def forward(self, z: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         z: (B, k, D)
-        Returns: (B, k, D)
+        Returns: (out (B, k, D), router_logits (B, k, num_experts))
         """
         _, _, _ = z.shape
         router_logits = self.router(z)
@@ -56,4 +57,4 @@ class ExpertConnector(nn.Module):
         for i, expert in enumerate(self.experts):
             w = router_weights[..., i : i + 1]
             out = out + w * expert(z)
-        return out
+        return out, router_logits

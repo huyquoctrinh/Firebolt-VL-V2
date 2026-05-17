@@ -35,11 +35,33 @@ model:
   # Special tokens
   image_token_id: 64400
 
+  # Auxiliary losses: stage 2 uses LM CE/NLL only.
+  aux_balance_loss_enabled: true
+  aux_balance_loss_weight: 0.01
+  aux_recon_loss_enabled: false
+  aux_recon_loss_weight: 1.0
+  recon_mask_ratio: 0.5
+  recon_mask_prob: 0.5
+  recon_teacher_model: "facebook/vjepa2-vitg-fpc64-384"
+  recon_teacher_hidden_size: 1408
+  aux_contrastive_loss_enabled: false
+  aux_contrastive_loss_weight: 0.1
+  contrastive_embed_dim: 512
+  contrastive_temperature: 0.07
+  contrastive_learnable_temp: true
+  aux_dino_loss_enabled: false
+  aux_dino_loss_weight: 1.0
+  dino_teacher_model: "facebook/dinov2-base"
+  dino_teacher_hidden_size: 768
+  dino_student_temperature: 0.1
+  dino_teacher_temperature: 0.04
+
 # --- Data ---
 data:
   image_path: "/home/mamba/ML_project/Testing/Huy/joint_vlm/dataset"
-  json_path: "/home/mamba/ML_project/Testing/Huy/joint_vlm/dataset/sharellava_mmpr12_merged_converted_fixed.jsonl"
+  json_path: "/home/mamba/ML_project/Testing/Huy/joint_vlm/dataset/llava_cot_mmpr_sharegpt_merged_clean.jsonl"
   train_val_split: [0.99, 0.01]
+  max_length: 4096
 
 # --- Training ---
 # Stage 1: freeze LLM + vision encoder, train connector only (router, expert_connector, ssm, visual_proj).
@@ -53,33 +75,41 @@ training:
     lr: 1e-4
   stage2:
     num_epochs: 2
-    lr: 1e-5
+    lr: 1e-4
   batch_size: 4
   num_workers: 32
   device: "cuda"
-  results_dir: "fireboltvl_results"
-  resume_from_checkpoint: null  # Set this only when doing stage 2 resume.
+  results_dir: "fireboltvl_results_muon_adamw_stage2"
+  resume_from_checkpoint: "/home/mamba/ML_project/Testing/Huy/joint_vlm/FireboltVL/fireboltvl_results1/stage1/epoch_2"  # Set this only when doing stage 2 resume.
   optimizer:
+    name: "muon_adamw"
     lr: 1e-4
+    weight_decay: 0.01
+    muon_momentum: 0.95
+    muon_nesterov: true
+    muon_ns_steps: 5
+    muon_eps: 1e-7
+    muon_adjust_lr_fn: "match_rms_adamw"
   scheduler:
-    T_max: 10
-    eta_min: 1e-6
+    T_max: 1
+    eta_min: 1e-4
   ddp:
-    enabled: False
+    enabled: True
     rank: 0
     world_size: 1
   amp_dtype: "bf16"
 
 # --- Evaluation / Inference ---
 evaluation:
-  model_dir: "/home/mamba/ML_project/Testing/Huy/joint_vlm/FireboltVL/fireboltvl_results/stage2/epoch_1"
+  model_dir: "/home/mamba/ML_project/Testing/Huy/joint_vlm/FireboltVL/fireboltvl_results1/stage2/epoch_1"
   tokenizer_dir: "/home/mamba/ML_project/Testing/Huy/joint_vlm/liquid_tokenizer_cot_fixed"
   prompt: "What is the original flight in the image?"
   image_path: "/home/mamba/ML_project/Testing/Huy/joint_vlm/viper-vlm/image2.jpg"
-  do_sample: True
-  top_p: 0.95
-  temperature: 0.1
-  max_new_tokens: 256
+  do_sample: False
+  top_p: 1.0
+  temperature: 1.0
+  repetition_penalty: 1.05
+  max_new_tokens: 96
 
 # --- Tokenizer & Processor ---
 tokenizer_path: "/home/mamba/ML_project/Testing/Huy/joint_vlm/liquid_tokenizer_cot_fixed"
